@@ -205,7 +205,7 @@ public class LibraryDownloader {
         String str2 = "/";
 
         for (int i = 0; i < split.length - 1; i++) {
-            str2 = str2.concat(split[i].replace(".", "/") + "/");
+            str2 = str2.concat(split[i] + "/");
         }
 
         return str2.concat(split[split.length - 1]).concat("/").concat(_getAarName(str));
