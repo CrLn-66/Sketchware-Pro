@@ -24,6 +24,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -60,13 +61,13 @@ public class LibraryDownloader {
     boolean use_d8;
     private OnCompleteListener listener;
     private AlertDialog dialog;
-    private boolean isAarAvailable = false, isAarDownloaded = false;
+    private boolean isLibAvailable = false, isLibDownloaded = false;
     private int downloadId;
     private String libName = "";
     private String currentRepo = "";
     private int counter = 0;
+    private boolean use_aar;
     private ArrayList<HashMap<String, Object>> repoMap = new ArrayList<>();
-
     public LibraryDownloader(Activity context, boolean use_d8) {
         this.context = context;
         this.use_d8 = use_d8;
@@ -148,10 +149,9 @@ public class LibraryDownloader {
                 if (!FileUtil.isExistFile(libName)) {
                     FileUtil.makeDir(libName);
                 }
-
-                isAarDownloaded = false;
-                isAarAvailable = false;
-
+                use_aar = true;
+                isLibDownloaded = false;
+                isLibAvailable = false;
                 library.setEnabled(false);
 
                 start.setEnabled(false);
@@ -205,7 +205,7 @@ public class LibraryDownloader {
         String str2 = "/";
 
         for (int i = 0; i < split.length - 1; i++) {
-            str2 = str2.concat(split[i] + "/");
+            str2 = str2.concat(split[i].replace(".", "/") + "/");
         }
 
         return str2.concat(split[split.length - 1]).concat("/").concat(_getAarName(str));
@@ -214,6 +214,22 @@ public class LibraryDownloader {
     private String _getAarName(String str) {
         String[] split = str.split(":");
         return split[split.length - 2] + "-" + split[split.length - 1] + ".aar";
+    }
+
+    private String _getJarDownloadLink(String str) {
+        String[] split = str.split(":");
+        String str2 = "/";
+
+        for (int i = 0; i < split.length - 1; i++) {
+            str2 = str2.concat(split[i].replace(".", "/") + "/");
+        }
+
+        return str2.concat(split[split.length - 1]).concat("/").concat(_getJarName(str));
+    }
+
+    private String _getJarName(String str) {
+        String[] split = str.split(":");
+        return split[split.length - 2] + "-" + split[split.length - 1] + ".jar";
     }
 
     private String _getLibName(String str) {
@@ -307,6 +323,32 @@ public class LibraryDownloader {
                 String content = FileUtil.readFile(f);
 
                 Pattern p = Pattern.compile("<manifest.*package=\"(.*?)\"", Pattern.DOTALL);
+                Matcher m = p.matcher(content);
+
+                if (m.find()) {
+                    return m.group(1);
+                }
+            }
+        }
+
+        // Method 2: screw manifest. use dependency
+        if (defaultValue.contains(":")) {
+            return defaultValue.split(":")[0];
+        }
+
+        // Method 3: nothing worked. return empty string (lmao) (yeah lmao)
+        return "";
+    }
+    private String findPackageNameinJar(String path, String defaultValue) {
+        ArrayList<String> files = new ArrayList<>();
+        FileUtil.listDir(path, files);
+
+        // Method 1: use manifest
+        for (String f : files) {
+            if (getLastSegment(f).equals("MANIFEST.MF")) {
+                String content = FileUtil.readFile(f);
+
+                Pattern p = Pattern.compile("Automatic-Module-Name:\\s(.*)", Pattern.DOTALL);
                 Matcher m = p.matcher(content);
 
                 if (m.find()) {
@@ -427,34 +469,57 @@ public class LibraryDownloader {
                 .start(new OnDownloadListener() {
                     @Override
                     public void onDownloadComplete() {
-                        isAarAvailable = true;
-                        isAarDownloaded = true;
+                        isLibAvailable = true;
+                        isLibDownloaded = true;
 
                         StringBuilder path2 = new StringBuilder();
                         path2.append(downloadPath);
                         path2.append(_getLibName(library.getText().toString()).concat(".zip"));
 
-                        if (isAarDownloaded && isAarAvailable) {
-                            _unZipFile(path2.toString(), libName);
-                            if (FileUtil.isExistFile(libName.concat("/classes.jar"))) {
-                                if (use_d8 || JarCheck.checkJar(libName.concat("/classes.jar"), 44, 51)) {
-                                    message.setText("Download completed.");
+                        if (isLibDownloaded && isLibAvailable) {
+                            if(use_aar){
+                                _unZipFile(path2.toString(), libName);
+                                if (FileUtil.isExistFile(libName.concat("/classes.jar"))) {
+                                    if (use_d8 || JarCheck.checkJar(libName.concat("/classes.jar"), 44, 51)) {
+                                        message.setText("Download completed.");
 
-                                    String[] test = new String[]{libName.concat("/classes.jar")};
-                                    new BackTask().execute(test);
-                                    FileUtil.deleteFile(path2.toString());
+                                        String[] test = new String[]{libName.concat("/classes.jar")};
+                                        new BackTask().execute(test);
+                                        FileUtil.deleteFile(path2.toString());
 
-                                    FileUtil.writeFile(libName + "/config", findPackageName(libName + "/", library.getText().toString()));
+                                        FileUtil.writeFile(libName + "/config", findPackageName(libName + "/", library.getText().toString()));
 
-                                    deleteUnnecessaryFiles(libName + "/");
+                                        deleteUnnecessaryFiles(libName + "/");
 
+                                    } else {
+                                        message.setText("This jar is not supported by Dx since Dx only supports up to Java 1.7. In order to proceed, you need to switch to D8 (if your Android version is 8+)");
+                                        FileUtil.deleteFile(path2.toString());
+                                    }
                                 } else {
+                                    message.setText("Library doesn't contain a jar file.");
+                                    FileUtil.deleteFile(path2.toString());
+                                }
+                            }else{
+                                String path3 = downloadPath+_getLibName(library.getText().toString()).concat(".jar");
+                                _unZipFile(path2.toString(), libName);
+                                String packageName = findPackageNameinJar(libName+"/META-INF/", library.getText().toString());
+                                if(use_d8 || JarCheck.checkJar(path2.toString(), 44, 51)){
+                                    message.setText("Download completed.");
+                                    FileUtil.moveFile(path2.toString(), libName+"/");
+                                    String[] test = new String[]{libName+"/"+path2.toString()};
+                                    new BackTask().execute(test);
+                                    FileUtil.writeFile(libName+"/config", packageName);
+                                    try {
+                                        write_manifest(libName+"/", packageName);
+                                    } catch (Exception e) {
+                                        message.setText("Error writing AndroidManifest.xml file.");
+                                    }
+                                    deleteUnnecessaryFiles(libName+"/");
+                                }else {
                                     message.setText("This jar is not supported by Dx since Dx only supports up to Java 1.7. In order to proceed, you need to switch to D8 (if your Android version is 8+)");
                                     FileUtil.deleteFile(path2.toString());
                                 }
-                            } else {
-                                message.setText("Library doesn't contain a jar file.");
-                                FileUtil.deleteFile(path2.toString());
+
                             }
                         }
 
@@ -475,13 +540,13 @@ public class LibraryDownloader {
                     @Override
                     public void onError(PRDownloader.Error e) {
                         if (e.isServerError()) {
-                            if (!(isAarDownloaded || isAarAvailable)) {
+                            if (!(isLibDownloaded || isLibAvailable) && use_aar) {
                                 if (counter < repoUrls.size()) {
                                     currentRepo = repoUrls.get(counter);
                                     String name = repoNames.get(counter);
 
                                     counter++;
-                                    message.setText("Searching... " + counter + "/" + repoUrls.size() + " [" + name + "]");
+                                    message.setText("Searching for aar... " + counter + "/" + repoUrls.size() + " [" + name + "]");
 
                                     downloadId = _download(
                                             currentRepo + _getAarDownloadLink(library.getText().toString()),
@@ -498,7 +563,47 @@ public class LibraryDownloader {
                                             progressbar1
                                     );
 
-                                } else {
+                                }else {
+                                   counter = 1;
+                                   use_aar = false;
+                                    downloadId = _download(
+                                            currentRepo + _getJarDownloadLink(library.getText().toString()),
+                                            downloadPath,
+                                            _getLibName(library.getText().toString()) + ".jar",
+                                            library,
+                                            message,
+                                            progressBarContainer,
+                                            libraryContainer,
+                                            start,
+                                            pause,
+                                            resume,
+                                            cancel,
+                                            progressbar1
+                                    );
+                                }
+                            }else if(!(isLibDownloaded || isLibAvailable) && !use_aar){
+                                if(counter < repoUrls.size()){
+                                    currentRepo = repoUrls.get(counter);
+                                    String name = repoNames.get(counter);
+
+                                    counter++;
+                                    message.setText("Searching for jar... " + counter + "/" + repoUrls.size() + " [" + name + "]");
+
+                                    downloadId = _download(
+                                            currentRepo + _getJarDownloadLink(library.getText().toString()),
+                                            downloadPath,
+                                            _getLibName(library.getText().toString()) + ".jar",
+                                            library,
+                                            message,
+                                            progressBarContainer,
+                                            libraryContainer,
+                                            start,
+                                            pause,
+                                            resume,
+                                            cancel,
+                                            progressbar1
+                                    );
+                                }else{
                                     FileUtil.deleteFile(libName);
                                     message.setText("Library was not found in loaded repositories");
                                     library.setEnabled(true);
@@ -535,6 +640,26 @@ public class LibraryDownloader {
                         }
                     }
                 });
+    }
+
+    private void write_manifest(String path, String packageName)throws Exception{
+        File file = new File(path+"AndroidManifest.xml");
+        FileOutputStream fos = new FileOutputStream(file);
+        String manifestData = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n" +
+                "    package=\""+packageName+"\" >\n" +
+                "\n" +
+                "    <uses-sdk\n" +
+                "        android:minSdkVersion=\"14\"\n" +
+                "        android:targetSdkVersion=\"32\" />\n" +
+                "\n" +
+                "    <application />\n" +
+                "\n" +
+                "</manifest>";
+        byte[] b = manifestData.getBytes(StandardCharsets.UTF_8);
+        fos.write(b, 0, b.length);
+        fos.flush();
+        fos.close();
     }
 
     private void _getRepository() {
